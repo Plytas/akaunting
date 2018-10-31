@@ -39,6 +39,14 @@ class Installer
             $requirements[] = trans('install.requirements.enabled', ['feature' => 'File Uploads']);
         }
 
+        if (!function_exists('proc_open')) {
+            $requirements[] = trans('install.requirements.enabled', ['feature' => 'proc_open']);
+        }
+
+        if (!function_exists('proc_close')) {
+            $requirements[] = trans('install.requirements.enabled', ['feature' => 'proc_close']);
+        }
+
         if (!class_exists('PDO')) {
             $requirements[] = trans('install.requirements.extension', ['extension' => 'MySQL PDO']);
         }
@@ -157,7 +165,7 @@ class Installer
 
         try {
             DB::connection('install_test')->getPdo();
-        } catch (\Exception $e) {;
+        } catch (\Exception $e) {
             return false;
         }
 

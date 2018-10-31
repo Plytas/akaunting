@@ -7,6 +7,7 @@ use App\Models\Income\Invoice;
 use App\Models\Income\InvoicePayment;
 use App\Models\Income\Revenue;
 use App\Models\Setting\Category;
+use App\Utilities\Recurring;
 use Charts;
 use Date;
 
@@ -55,26 +56,37 @@ class IncomeSummary extends Controller
             }
         }
 
-        // Invoices
+        $revenues = Revenue::monthsOfYear('paid_at')->isNotTransfer()->get();
+
         switch ($status) {
             case 'paid':
+                // Invoices
                 $invoices = InvoicePayment::monthsOfYear('paid_at')->get();
                 $this->setAmount($incomes_graph, $totals, $incomes, $invoices, 'invoice', 'paid_at');
+
+                // Revenues
+                $this->setAmount($incomes_graph, $totals, $incomes, $revenues, 'revenue', 'paid_at');
                 break;
             case 'upcoming':
+                // Invoices
                 $invoices = Invoice::accrued()->monthsOfYear('due_at')->get();
+                Recurring::reflect($invoices, 'invoice', 'invoiced_at', $status);
                 $this->setAmount($incomes_graph, $totals, $incomes, $invoices, 'invoice', 'due_at');
+
+                // Revenues
+                Recurring::reflect($revenues, 'revenue', 'paid_at', $status);
+                $this->setAmount($incomes_graph, $totals, $incomes, $revenues, 'revenue', 'paid_at');
                 break;
             default:
+                // Invoices
                 $invoices = Invoice::accrued()->monthsOfYear('invoiced_at')->get();
+                Recurring::reflect($invoices, 'invoice', 'invoiced_at', $status);
                 $this->setAmount($incomes_graph, $totals, $incomes, $invoices, 'invoice', 'invoiced_at');
-                break;
-        }
 
-        // Revenues
-        if ($status != 'upcoming') {
-            $revenues = Revenue::monthsOfYear('paid_at')->isNotTransfer()->get();
-            $this->setAmount($incomes_graph, $totals, $incomes, $revenues, 'revenue', 'paid_at');
+                // Revenues
+                Recurring::reflect($revenues, 'revenue', 'paid_at', $status);
+                $this->setAmount($incomes_graph, $totals, $incomes, $revenues, 'revenue', 'paid_at');
+                break;
         }
 
         // Check if it's a print or normal request
@@ -101,7 +113,7 @@ class IncomeSummary extends Controller
     private function setAmount(&$graph, &$totals, &$incomes, $items, $type, $date_field)
     {
         foreach ($items as $item) {
-            if ($item['table'] == 'invoice_payments') {
+            if ($item->getTable() == 'invoice_payments') {
                 $invoice = $item->invoice;
 
                 $item->category_id = $invoice->category_id;

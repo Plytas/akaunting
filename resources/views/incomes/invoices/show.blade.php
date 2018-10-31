@@ -15,6 +15,88 @@
         </div>
     @endif
 
+    @if ($invoice->status->code == 'draft')
+    <div class="callout callout-warning">
+        <p>{!! trans('invoices.messages.draft') !!}</p>
+    </div>
+    @endif
+
+    @if ($invoice->status->code != 'paid')
+    <div class="row show-invoice">
+        <div class="col-md-12 no-padding-right">
+            <ul class="timeline">
+                <li>
+                    <i class="fa fa-plus bg-blue"></i>
+
+                    <div class="timeline-item">
+                        <h3 class="timeline-header">{{ trans('general.title.create', ['type' => trans_choice('general.invoices', 1)]) }}</h3>
+
+                        <div class="timeline-body">
+                            {{ trans_choice('general.statuses', 1) . ': ' . trans('invoices.messages.status.created', ['date' => Date::parse($invoice->created_at)->format($date_format)]) }}
+
+                            <a href="{{ url('incomes/invoices/' . $invoice->id . '/edit') }}" class="btn btn-default btn-xs">
+                                {{ trans('general.edit') }}
+                            </a>
+                        </div>
+                    </div>
+                </li>
+                <li>
+                    <i class="fa fa-envelope bg-orange"></i>
+
+                    <div class="timeline-item">
+                        <h3 class="timeline-header">{{ trans('general.title.send', ['type' => trans_choice('general.invoices', 1)]) }}</h3>
+
+                        <div class="timeline-body">
+                            @if ($invoice->status->code != 'sent' && $invoice->status->code != 'partial')
+                                {{ trans_choice('general.statuses', 1) . ': ' . trans('invoices.messages.status.send.draft') }}
+
+                                @permission('update-incomes-invoices')
+                                @if($invoice->invoice_status_code == 'draft')
+                                    <a href="{{ url('incomes/invoices/' . $invoice->id . '/sent') }}" class="btn btn-default btn-xs">{{ trans('invoices.mark_sent') }}</a>
+                                @else
+                                    <a href="javascript:void(0);" class="disabled btn btn-default btn-xs"><span class="text-disabled"> {{ trans('invoices.mark_sent') }}</span></a>
+                                @endif
+                                @endpermission
+                                @if($invoice->customer_email)
+                                    <a href="{{ url('incomes/invoices/' . $invoice->id . '/email') }}" class="btn btn-warning btn-xs">{{ trans('invoices.send_mail') }}</a>
+                                @else
+                                    <a href="javascript:void(0);" class="btn btn-warning btn-xs green-tooltip disabled" data-toggle="tooltip" data-placement="right" title="{{ trans('invoices.messages.email_required') }}">
+                                        <span class="text-disabled">{{ trans('invoices.send_mail') }}</span>
+                                    </a>
+                                @endif
+                            @else
+                                {{ trans_choice('general.statuses', 1) . ': ' . trans('invoices.messages.status.send.sent', ['date' => Date::parse($invoice->created_at)->format($date_format)]) }}
+                            @endif
+                        </div>
+                    </div>
+                </li>
+                <li>
+                    <i class="fa fa-money bg-green"></i>
+
+                    <div class="timeline-item">
+                        <h3 class="timeline-header">{{ trans('general.title.get', ['type' => trans('general.paid')]) }}</h3>
+
+                        <div class="timeline-body">
+                            @if($invoice->status->code != 'paid' && empty($invoice->payments()->count()))
+                                {{ trans_choice('general.statuses', 1) . ': ' . trans('invoices.messages.status.paid.await') }}
+                            @else
+                                {{ trans_choice('general.statuses', 1) . ': ' . trans('general.partially_paid') }}
+                            @endif
+
+                            @permission('update-incomes-invoices')
+                            <a href="{{ url('incomes/invoices/' . $invoice->id . '/pay') }}" class="btn btn-default btn-xs">{{ trans('invoices.mark_paid') }}</a>
+                            @endpermission
+                            @if(empty($invoice->payments()->count()) || (!empty($invoice->payments()->count()) && $invoice->paid != $invoice->amount))
+                                <a href="#" id="button-payment" class="btn btn-success btn-xs">{{ trans('invoices.add_payment') }}</a>
+                            @endif
+                        </div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+    </div>
+    @endif
+
     <div class="box box-success">
         <section class="invoice">
             <div id="badge">
@@ -98,9 +180,9 @@
                     <table class="table table-striped">
                         <tbody>
                             <tr>
-                                <th>{{ trans_choice('general.items', 1) }}</th>
-                                <th class="text-center">{{ trans('invoices.quantity') }}</th>
-                                <th class="text-right">{{ trans('invoices.price') }}</th>
+                                <th>{{ trans_choice($text_override['items'], 2) }}</th>
+                                <th class="text-center">{{ trans($text_override['quantity']) }}</th>
+                                <th class="text-right">{{ trans($text_override['price']) }}</th>
                                 <th class="text-right">{{ trans('invoices.total') }}</th>
                             </tr>
                             @foreach($invoice->items as $item)
@@ -162,11 +244,16 @@
 
             <div class="box-footer row no-print">
                 <div class="col-md-12">
+                    @if(!$invoice->reconciled)
                     <a href="{{ url('incomes/invoices/' . $invoice->id . '/edit') }}" class="btn btn-default">
                         <i class="fa fa-pencil-square-o"></i>&nbsp; {{ trans('general.edit') }}
                     </a>
+                    @endif
                     <a href="{{ url('incomes/invoices/' . $invoice->id . '/print') }}" target="_blank" class="btn btn-success">
                         <i class="fa fa-print"></i>&nbsp; {{ trans('general.print') }}
+                    </a>
+                    <a href="{{ $customer_share }}" target="_blank" class="btn btn-primary">
+                        <i class="fa fa-share"></i>&nbsp; Share
                     </a>
                     <div class="btn-group dropup">
                         <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-expanded="false"><i class="fa fa-chevron-circle-up"></i>&nbsp; {{ trans('general.more_actions') }}</button>
@@ -175,7 +262,7 @@
                             @permission('update-incomes-invoices')
                             <li><a href="{{ url('incomes/invoices/' . $invoice->id . '/pay') }}">{{ trans('invoices.mark_paid') }}</a></li>
                             @endpermission
-                            @if(empty($invoice->payments()->count()) || (!empty($invoice->payments()->count()) && $invoice->paid != $invoice->amount))
+                            @if(empty($invoice->paid) || ($invoice->paid != $invoice->amount))
                             <li><a href="#" id="button-payment">{{ trans('invoices.add_payment') }}</a></li>
                             @endif
                             <li class="divider"></li>
@@ -194,9 +281,11 @@
                             @endif
                             <li class="divider"></li>
                             <li><a href="{{ url('incomes/invoices/' . $invoice->id . '/pdf') }}">{{ trans('invoices.download_pdf') }}</a></li>
-                            <li class="divider"></li>
                             @permission('delete-incomes-invoices')
+                            @if(!$invoice->reconciled)
+                            <li class="divider"></li>
                             <li>{!! Form::deleteLink($invoice, 'incomes/invoices') !!}</li>
+                            @endif
                             @endpermission
                         </ul>
                     </div>
@@ -289,6 +378,11 @@
                                     <td>@money($payment->amount, $payment->currency_code, true)</td>
                                     <td>{{ $payment->account->name }}</td>
                                     <td>
+                                        @if ($payment->reconciled)
+                                        <button type="button" class="btn btn-default btn-xs">
+                                            <i class="fa fa-check"></i> {{ trans('reconciliations.reconciled') }}
+                                        </button>
+                                        @else
                                         <a href="{{ url('incomes/invoices/' . $payment->id . '') }}" class="btn btn-info btn-xs hidden"><i class="fa fa-eye" aria-hidden="true"></i> {{ trans('general.show') }}</a>
                                         <a href="{{ url('incomes/revenues/' . $payment->id . '/edit') }}" class="btn btn-primary btn-xs  hidden"><i class="fa fa-pencil-square-o" aria-hidden="true"></i> {{ trans('general.edit') }}</a>
                                         {!! Form::open([
@@ -304,6 +398,7 @@
                                             'onclick' => 'confirmDelete("' . '#invoice-payment-' . $payment->id . '", "' . trans_choice('general.payments', 2) . '", "' . trans('general.delete_confirm', ['name' => '<strong>' . Date::parse($payment->paid_at)->format($date_format) . ' - ' . money($payment->amount, $payment->currency_code, true) . ' - ' . $payment->account->name . '</strong>', 'type' => strtolower(trans_choice('general.revenues', 1))]) . '", "' . trans('general.cancel') . '", "' . trans('general.delete') . '")'
                                         )) !!}
                                         {!! Form::close() !!}
+                                        @endif
                                     </td>
                                 </tr>
                             @endforeach

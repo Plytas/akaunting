@@ -14,6 +14,7 @@ use App\Models\Income\Customer;
 use App\Models\Income\Invoice;
 use App\Models\Income\InvoiceHistory;
 use App\Models\Income\InvoiceItem;
+use App\Models\Income\InvoiceItemTax;
 use App\Models\Income\InvoiceTotal;
 use App\Models\Income\InvoicePayment;
 use App\Models\Income\InvoiceStatus;
@@ -36,6 +37,7 @@ use File;
 use Illuminate\Http\Request as ItemRequest;
 use Image;
 use Storage;
+use SignedUrl;
 
 class Invoices extends Controller
 {
@@ -68,43 +70,6 @@ class Invoices extends Controller
      */
     public function show(Invoice $invoice)
     {
-        $paid = 0;
-
-        // Get Invoice Payments
-        if ($invoice->payments->count()) {
-            $_currencies = Currency::enabled()->pluck('rate', 'code')->toArray();
-
-            foreach ($invoice->payments as $item) {
-                $default_amount = $item->amount;
-
-                if ($invoice->currency_code == $item->currency_code) {
-                    $amount = (double)$default_amount;
-                } else {
-                    $default_amount_model = new InvoicePayment();
-
-                    $default_amount_model->default_currency_code = $invoice->currency_code;
-                    $default_amount_model->amount = $default_amount;
-                    $default_amount_model->currency_code = $item->currency_code;
-                    $default_amount_model->currency_rate = $_currencies[$item->currency_code];
-
-                    $default_amount = (double) $default_amount_model->getDivideConvertedAmount();
-
-                    $convert_amount = new InvoicePayment();
-
-                    $convert_amount->default_currency_code = $item->currency_code;
-                    $convert_amount->amount = $default_amount;
-                    $convert_amount->currency_code = $invoice->currency_code;
-                    $convert_amount->currency_rate = $_currencies[$invoice->currency_code];
-
-                    $amount = (double) $convert_amount->getDynamicConvertedAmount();
-                }
-
-                $paid += $amount;
-            }
-        }
-
-        $invoice->paid = $paid;
-
         $accounts = Account::enabled()->orderBy('name')->pluck('name', 'id');
 
         $currencies = Currency::enabled()->orderBy('name')->pluck('name', 'code')->toArray();
@@ -117,7 +82,9 @@ class Invoices extends Controller
 
         $payment_methods = Modules::getPaymentMethods();
 
-        return view('incomes.invoices.show', compact('invoice', 'accounts', 'currencies', 'account_currency_code', 'customers', 'categories', 'payment_methods'));
+        $customer_share = SignedUrl::sign(url('links/invoices/' . $invoice->id));
+
+        return view('incomes.invoices.show', compact('invoice', 'accounts', 'currencies', 'account_currency_code', 'customers', 'categories', 'payment_methods', 'customer_share'));
     }
 
     /**
@@ -215,18 +182,32 @@ class Invoices extends Controller
                     }
                 }
 
-                $tax = $tax_id = 0;
+                $item_tax = 0;
+                $item_taxes = [];
+                $invoice_item_taxes = [];
 
                 if (!empty($item['tax_id'])) {
-                    $tax_object = Tax::find($item['tax_id']);
+                    foreach ($item['tax_id'] as $tax_id) {
+                        $tax_object = Tax::find($tax_id);
 
-                    $tax_id = $item['tax_id'];
+                        $item_taxes[] = $tax_id;
 
-                    $tax = (((double) $item['price'] * (double) $item['quantity']) / 100) * $tax_object->rate;
+                        $tax = (((double) $item['price'] * (double) $item['quantity']) / 100) * $tax_object->rate;
 
-                    // Apply discount to tax
-                    if ($discount) {
-                        $tax = $tax - ($tax * ($discount / 100));
+                        // Apply discount to tax
+                        if ($discount) {
+                            $tax = $tax - ($tax * ($discount / 100));
+                        }
+
+                        $invoice_item_taxes[] = [
+                            'company_id' => $request['company_id'],
+                            'invoice_id' => $invoice->id,
+                            'tax_id' => $tax_id,
+                            'name' => $tax_object->name,
+                            'amount' => $tax,
+                        ];
+
+                        $item_tax += $tax;
                     }
                 }
 
@@ -235,29 +216,33 @@ class Invoices extends Controller
                 $invoice_item['sku'] = $item_sku;
                 $invoice_item['quantity'] = (double) $item['quantity'];
                 $invoice_item['price'] = (double) $item['price'];
-                $invoice_item['tax'] = $tax;
-                $invoice_item['tax_id'] = $tax_id;
+                $invoice_item['tax'] = $item_tax;
+                $invoice_item['tax_id'] = 0;//(int) $item_taxes;
                 $invoice_item['total'] = (double) $item['price'] * (double) $item['quantity'];
 
-                InvoiceItem::create($invoice_item);
+                $invoice_item_created = InvoiceItem::create($invoice_item);
 
-                // Set taxes
-                if (isset($tax_object)) {
-                    if (array_key_exists($tax_object->id, $taxes)) {
-                        $taxes[$tax_object->id]['amount'] += $tax;
-                    } else {
-                        $taxes[$tax_object->id] = [
-                            'name' => $tax_object->name,
-                            'amount' => $tax
-                        ];
+                if ($invoice_item_taxes) {
+                    foreach ($invoice_item_taxes as $invoice_item_tax) {
+                        $invoice_item_tax['invoice_item_id'] = $invoice_item_created->id;
+
+                        InvoiceItemTax::create($invoice_item_tax);
+
+                        // Set taxes
+                        if (isset($taxes) && array_key_exists($invoice_item_tax['tax_id'], $taxes)) {
+                            $taxes[$invoice_item_tax['tax_id']]['amount'] += $invoice_item_tax['amount'];
+                        } else {
+                            $taxes[$invoice_item_tax['tax_id']] = [
+                                'name' => $invoice_item_tax['name'],
+                                'amount' => $invoice_item_tax['amount']
+                            ];
+                        }
                     }
                 }
 
                 // Calculate totals
-                $tax_total += $tax;
+                $tax_total += $item_tax;
                 $sub_total += $invoice_item['total'];
-
-                unset($tax_object);
             }
         }
 
@@ -412,6 +397,7 @@ class Invoices extends Controller
     public function update(Invoice $invoice, Request $request)
     {
         $taxes = [];
+
         $tax_total = 0;
         $sub_total = 0;
         $discount_total = 0;
@@ -435,18 +421,32 @@ class Invoices extends Controller
                     $item_sku = $item_object->sku;
                 }
 
-                $tax = $tax_id = 0;
+                $item_tax = 0;
+                $item_taxes = [];
+                $invoice_item_taxes = [];
 
                 if (!empty($item['tax_id'])) {
-                    $tax_object = Tax::find($item['tax_id']);
+                    foreach ($item['tax_id'] as $tax_id) {
+                        $tax_object = Tax::find($tax_id);
 
-                    $tax_id = $item['tax_id'];
+                        $item_taxes[] = $tax_id;
 
-                    $tax = (((double) $item['price'] * (double) $item['quantity']) / 100) * $tax_object->rate;
+                        $tax = (((double) $item['price'] * (double) $item['quantity']) / 100) * $tax_object->rate;
 
-                    // Apply discount to tax
-                    if ($discount) {
-                        $tax = $tax - ($tax * ($discount / 100));
+                        // Apply discount to tax
+                        if ($discount) {
+                            $tax = $tax - ($tax * ($discount / 100));
+                        }
+
+                        $invoice_item_taxes[] = [
+                            'company_id' => $request['company_id'],
+                            'invoice_id' => $invoice->id,
+                            'tax_id' => $tax_id,
+                            'name' => $tax_object->name,
+                            'amount' => $tax,
+                        ];
+
+                        $item_tax += $tax;
                     }
                 }
 
@@ -456,24 +456,31 @@ class Invoices extends Controller
                 $invoice_item['quantity'] = (double) $item['quantity'];
                 $invoice_item['price'] = (double) $item['price'];
                 $invoice_item['tax'] = $tax;
-                $invoice_item['tax_id'] = $tax_id;
+                $invoice_item['tax_id'] = 0;//$tax_id;
                 $invoice_item['total'] = (double) $item['price'] * (double) $item['quantity'];
 
-                if (isset($tax_object)) {
-                    if (array_key_exists($tax_object->id, $taxes)) {
-                        $taxes[$tax_object->id]['amount'] += $tax;
-                    } else {
-                        $taxes[$tax_object->id] = [
-                            'name' => $tax_object->name,
-                            'amount' => $tax
-                        ];
+                $invoice_item_created = InvoiceItem::create($invoice_item);
+
+                if ($invoice_item_taxes) {
+                    foreach ($invoice_item_taxes as $invoice_item_tax) {
+                        $invoice_item_tax['invoice_item_id'] = $invoice_item_created->id;
+
+                        InvoiceItemTax::create($invoice_item_tax);
+
+                        // Set taxes
+                        if (isset($taxes) && array_key_exists($invoice_item_tax['tax_id'], $taxes)) {
+                            $taxes[$invoice_item_tax['tax_id']]['amount'] += $invoice_item_tax['amount'];
+                        } else {
+                            $taxes[$invoice_item_tax['tax_id']] = [
+                                'name' => $invoice_item_tax['name'],
+                                'amount' => $invoice_item_tax['amount']
+                            ];
+                        }
                     }
                 }
 
-                $tax_total += $tax;
+                $tax_total += $item_tax;
                 $sub_total += $invoice_item['total'];
-
-                InvoiceItem::create($invoice_item);
             }
         }
 
@@ -975,12 +982,12 @@ class Invoices extends Controller
 
             // This is for total
             $sub_total = $sub_total - $discount_total;
+
+            $sort_order++;
         }
 
-        $sort_order++;
-
         // Added invoice taxes
-        if ($taxes) {
+        if (isset($taxes)) {
             foreach ($taxes as $tax) {
                 InvoiceTotal::create([
                     'company_id' => $request['company_id'],

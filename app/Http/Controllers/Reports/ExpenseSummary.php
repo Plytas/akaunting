@@ -7,6 +7,7 @@ use App\Models\Expense\Bill;
 use App\Models\Expense\BillPayment;
 use App\Models\Expense\Payment;
 use App\Models\Setting\Category;
+use App\Utilities\Recurring;
 use Charts;
 use Date;
 
@@ -55,26 +56,37 @@ class ExpenseSummary extends Controller
             }
         }
 
-        // Bills
+        $payments = Payment::monthsOfYear('paid_at')->isNotTransfer()->get();
+
         switch ($status) {
             case 'paid':
+                // Bills
                 $bills = BillPayment::monthsOfYear('paid_at')->get();
                 $this->setAmount($expenses_graph, $totals, $expenses, $bills, 'bill', 'paid_at');
+
+                // Payments
+                $this->setAmount($expenses_graph, $totals, $expenses, $payments, 'payment', 'paid_at');
                 break;
             case 'upcoming':
+                // Bills
                 $bills = Bill::accrued()->monthsOfYear('due_at')->get();
+                Recurring::reflect($bills, 'bill', 'billed_at', $status);
                 $this->setAmount($expenses_graph, $totals, $expenses, $bills, 'bill', 'due_at');
+
+                // Payments
+                Recurring::reflect($payments, 'payment', 'paid_at', $status);
+                $this->setAmount($expenses_graph, $totals, $expenses, $payments, 'payment', 'paid_at');
                 break;
             default:
+                // Bills
                 $bills = Bill::accrued()->monthsOfYear('billed_at')->get();
+                Recurring::reflect($bills, 'bill', 'billed_at', $status);
                 $this->setAmount($expenses_graph, $totals, $expenses, $bills, 'bill', 'billed_at');
-                break;
-        }
 
-        // Payments
-        if ($status != 'upcoming') {
-            $payments = Payment::monthsOfYear('paid_at')->isNotTransfer()->get();
-            $this->setAmount($expenses_graph, $totals, $expenses, $payments, 'payment', 'paid_at');
+                // Payments
+                Recurring::reflect($payments, 'payment', 'paid_at', $status);
+                $this->setAmount($expenses_graph, $totals, $expenses, $payments, 'payment', 'paid_at');
+                break;
         }
 
         // Check if it's a print or normal request
@@ -101,7 +113,7 @@ class ExpenseSummary extends Controller
     private function setAmount(&$graph, &$totals, &$expenses, $items, $type, $date_field)
     {
         foreach ($items as $item) {
-            if ($item['table'] == 'bill_payments') {
+            if ($item->getTable() == 'bill_payments') {
                 $bill = $item->bill;
 
                 $item->category_id = $bill->category_id;

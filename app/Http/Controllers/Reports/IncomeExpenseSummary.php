@@ -10,6 +10,7 @@ use App\Models\Expense\Bill;
 use App\Models\Expense\BillPayment;
 use App\Models\Expense\Payment;
 use App\Models\Setting\Category;
+use App\Utilities\Recurring;
 use Charts;
 use Date;
 
@@ -70,48 +71,63 @@ class IncomeExpenseSummary extends Controller
             }
         }
 
-        // Invoices
+        $revenues = Revenue::monthsOfYear('paid_at')->isNotTransfer()->get();
+        $payments = Payment::monthsOfYear('paid_at')->isNotTransfer()->get();
+
         switch ($status) {
             case 'paid':
+                // Invoices
                 $invoices = InvoicePayment::monthsOfYear('paid_at')->get();
                 $this->setAmount($profit_graph, $totals, $compares, $invoices, 'invoice', 'paid_at');
-                break;
-            case 'upcoming':
-                $invoices = Invoice::accrued()->monthsOfYear('due_at')->get();
-                $this->setAmount($profit_graph, $totals, $compares, $invoices, 'invoice', 'due_at');
-                break;
-            default:
-                $invoices = Invoice::accrued()->monthsOfYear('invoiced_at')->get();
-                $this->setAmount($profit_graph, $totals, $compares, $invoices, 'invoice', 'invoiced_at');
-                break;
-        }
 
-        // Revenues
-        if ($status != 'upcoming') {
-            $revenues = Revenue::monthsOfYear('paid_at')->isNotTransfer()->get();
-            $this->setAmount($profit_graph, $totals, $compares, $revenues, 'revenue', 'paid_at');
-        }
+                // Revenues
+                $this->setAmount($profit_graph, $totals, $compares, $revenues, 'revenue', 'paid_at');
 
-        // Bills
-        switch ($status) {
-            case 'paid':
+                // Bills
                 $bills = BillPayment::monthsOfYear('paid_at')->get();
                 $this->setAmount($profit_graph, $totals, $compares, $bills, 'bill', 'paid_at');
+
+                // Payments
+                $this->setAmount($profit_graph, $totals, $compares, $payments, 'payment', 'paid_at');
                 break;
             case 'upcoming':
+                // Invoices
+                $invoices = Invoice::accrued()->monthsOfYear('due_at')->get();
+                Recurring::reflect($invoices, 'invoice', 'due_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $invoices, 'invoice', 'due_at');
+
+                // Revenues
+                Recurring::reflect($revenues, 'revenue', 'paid_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $revenues, 'revenue', 'paid_at');
+
+                // Bills
                 $bills = Bill::accrued()->monthsOfYear('due_at')->get();
+                Recurring::reflect($bills, 'bill', 'billed_at', $status);
                 $this->setAmount($profit_graph, $totals, $compares, $bills, 'bill', 'due_at');
+
+                // Payments
+                Recurring::reflect($payments, 'payment', 'paid_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $payments, 'payment', 'paid_at');
                 break;
             default:
+                // Invoices
+                $invoices = Invoice::accrued()->monthsOfYear('invoiced_at')->get();
+                Recurring::reflect($invoices, 'invoice', 'invoiced_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $invoices, 'invoice', 'invoiced_at');
+
+                // Revenues
+                Recurring::reflect($revenues, 'revenue', 'paid_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $revenues, 'revenue', 'paid_at');
+
+                // Bills
                 $bills = Bill::accrued()->monthsOfYear('billed_at')->get();
+                Recurring::reflect($bills, 'bill', 'billed_at', $status);
                 $this->setAmount($profit_graph, $totals, $compares, $bills, 'bill', 'billed_at');
+
+                // Payments
+                Recurring::reflect($payments, 'payment', 'paid_at', $status);
+                $this->setAmount($profit_graph, $totals, $compares, $payments, 'payment', 'paid_at');
                 break;
-        }
-        
-        // Payments
-        if ($status != 'upcoming') {
-            $payments = Payment::monthsOfYear('paid_at')->isNotTransfer()->get();
-            $this->setAmount($profit_graph, $totals, $compares, $payments, 'payment', 'paid_at');
         }
 
         // Check if it's a print or normal request
@@ -138,7 +154,7 @@ class IncomeExpenseSummary extends Controller
     private function setAmount(&$graph, &$totals, &$compares, $items, $type, $date_field)
     {
         foreach ($items as $item) {
-            if ($item['table'] == 'bill_payments' || $item['table'] == 'invoice_payments') {
+            if ($item->getTable() == 'bill_payments' || $item->getTable() == 'invoice_payments') {
                 $type_item = $item->$type;
 
                 $item->category_id = $type_item->category_id;
